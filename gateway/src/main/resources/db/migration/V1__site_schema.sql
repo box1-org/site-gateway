@@ -13,6 +13,8 @@ CREATE TABLE outbox (
     record_key text NOT NULL,
     envelope text NOT NULL,
     occurred_at timestamptz NOT NULL,
+    -- Readings only: when the reading was measured. The age bound uses the older of this and occurred_at.
+    measured_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     published_at timestamptz,
     attempts integer NOT NULL DEFAULT 0

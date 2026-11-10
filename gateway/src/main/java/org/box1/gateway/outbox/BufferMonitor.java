@@ -54,7 +54,8 @@ public class BufferMonitor {
             identity = "buffer-guard")
     void guard() {
         try {
-            db.inTransaction((Connection connection) -> store.dropExpiredReadings(connection));
+            long expired = db.inTransaction((Connection connection) -> store.dropExpiredReadings(connection));
+            store.countDropped("age", expired);
             db.inTransaction((Connection connection) -> store.prunePublished(connection));
         } catch (SQLException error) {
             LOG.warnf("Buffer guard could not run: %s", error.getMessage());

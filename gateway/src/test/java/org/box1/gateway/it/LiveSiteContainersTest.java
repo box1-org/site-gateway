@@ -45,6 +45,8 @@ class LiveSiteContainersTest {
 
     @Inject
     Db db;
+    @Inject
+    org.apache.camel.CamelContext camel;
 
     private static Map<String, Object> parse(String value) throws Exception {
         return JSON.readValue(value, MAP);
@@ -117,6 +119,21 @@ class LiveSiteContainersTest {
     }
 
     @Test
+    void readingsQueuedWhileTheGatewayIsDisconnectedArriveWhenItReconnects() throws Exception {
+        await("route started", Duration.ofSeconds(60), () -> given().get("/q/health/ready").statusCode() == 200);
+        camel.getRouteController().stopRoute(org.box1.gateway.ingest.ReadingRoute.ROUTE_ID);
+        Instant base = Instant.now().truncatedTo(ChronoUnit.SECONDS).minusSeconds(300);
+        List<String> messages = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            messages.add(Fixtures.reading("asset_backlog_ds9", "site_ds9", base.plusMillis(i * 10L), i));
+        }
+        Fixtures.mqttPublish(messages);
+        camel.getRouteController().startRoute(org.box1.gateway.ingest.ReadingRoute.ROUTE_ID);
+        await("the broker's backlog is recorded", Duration.ofSeconds(30), quietly(() -> count(db.dataSource(),
+                "SELECT count(*) FROM outbox WHERE record_key = 'asset_backlog_ds9'") == 10));
+    }
+
+    @Test
     void aDatabaseOutageHoldsTheReadingUntilItIsStored() throws Exception {
         Instant at = Instant.now().truncatedTo(ChronoUnit.MILLIS);
         UUID eventId = Envelopes.readingEventId("asset_dbdown_ds9", "vibration", at);
@@ -134,6 +151,9 @@ class LiveSiteContainersTest {
     @Test
     void pickListKeepsOnlyThisSiteAndAPickBecomesOneSiteEvent() throws Exception {
         String reservedEventId = UUID.randomUUID().toString();
+        // Schema-valid, but PostgreSQL rejects a NUL in text: it is skipped and must not block the records after it.
+        Fixtures.kafkaSend("box1.inventory.events.v1", "ord_nul", reserved(UUID.randomUUID().toString(), "ord_nul",
+                "res_nul", "site_ds9").replace("\"sku\":\"SKU-42\"", "\"sku\":\"SKU\\u0000\""));
         Fixtures.kafkaSend("box1.inventory.events.v1", "ord_it1", reserved(reservedEventId, "ord_it1", "res_it1", "site_ds9"));
         Fixtures.kafkaSend("box1.inventory.events.v1", "ord_it2", reserved(UUID.randomUUID().toString(), "ord_it2",
                 "res_it2", "site_spacedock"));
@@ -142,6 +162,8 @@ class LiveSiteContainersTest {
                 "res_it3", "site_ds9"));
         await("pick list", Duration.ofSeconds(60), quietly(() -> count(db.dataSource(),
                 "SELECT count(*) FROM pick_item WHERE order_id IN ('ord_it1', 'ord_it3')") == 2));
+        assertEquals(0, count(db.dataSource(), "SELECT count(*) FROM pick_item WHERE order_id = 'ord_nul'"),
+                "a record the database rejects is skipped");
         assertEquals(0, count(db.dataSource(), "SELECT count(*) FROM pick_item WHERE order_id = 'ord_it2'"),
                 "another site's reservation is not on this pick list");
         given().get("/api/v1/site/pick-list?status=SHIPPED").then().statusCode(200);

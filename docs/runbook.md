@@ -49,7 +49,7 @@ Metrics on `http://127.0.0.1:8080/q/metrics`, each with label `site_id`:
 | `site_outbox_dropped_total{reason="size"\|"age"}` | Readings dropped by the bound since start |
 | `site_outbox_refused_total` | Operator actions refused because the site-event backlog was full |
 | `site_readings_rejected_total{reason}` | MQTT messages that could never be valid readings |
-| `site_picklist_records_total{outcome}` | Pick-list records by outcome (`added`, `duplicate`, `other_site`, `expired`, `shipped`, `ignored`, `poison`) |
+| `site_picklist_records_total{outcome}` | Pick-list records by outcome (`added`, `duplicate`, `other_site`, `expired`, `shipped`, `ignored`, `poison`, `rejected`) |
 | `site_heartbeat_total{outcome}` | Heartbeats by outcome (`ok`, `http_<status>`, `unreachable`, `unconfigured`) |
 
 ## Replay
@@ -67,7 +67,7 @@ Rows already pruned (published more than 48 h ago) cannot be replayed from the s
 ## Overflow
 
 When the readings bound is reached, the oldest pending readings are dropped (`outbox_drop`, reason `SIZE`), and
-pending readings older than 12 h are dropped every 30 s (reason `AGE`). When the site-event backlog reaches 20 000,
+pending readings measured more than 12 h ago are dropped every 30 s (reason `AGE`). When the site-event backlog reaches 20 000,
 site-ops shows "The site buffer is full: nothing was recorded" and the gateway answers 503 `BUFFER_FULL`; nothing is
 lost, the operator retries after the link returns. Limits are set with `SITE_BUFFER_MAX_READINGS`,
 `SITE_BUFFER_MAX_READING_AGE`, `SITE_BUFFER_MAX_SITE_EVENTS` in the unit environment.

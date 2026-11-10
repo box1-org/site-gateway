@@ -24,6 +24,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import org.box1.gateway.config.SiteConfig;
 import org.box1.gateway.outbox.Envelopes;
+import org.box1.gateway.outbox.EventClass;
 import org.box1.gateway.outbox.OutboxStore;
 import org.box1.gateway.support.Db;
 import org.jboss.logging.Logger;
@@ -88,7 +89,7 @@ public class ReadingIngest {
             span.setAttribute("event.id", eventId.toString());
             Instant occurredAt = clock.instant();
             Map<String, Object> envelope = envelope(eventId, reading, occurredAt, traceparent(span));
-            boolean added = storeWithRetry(eventId, reading.assetId(), occurredAt, envelope);
+            boolean added = storeWithRetry(eventId, reading.assetId(), occurredAt, reading.measuredAt(), envelope);
             span.setAttribute("duplicate", !added);
             return added;
         } finally {
@@ -112,13 +113,18 @@ public class ReadingIngest {
                 eventId.toString(), Envelopes.SITE_INGEST, traceparent, payload);
     }
 
-    private boolean storeWithRetry(UUID eventId, String assetId, Instant occurredAt, Map<String, Object> envelope)
-            throws InterruptedException {
+    private boolean storeWithRetry(UUID eventId, String assetId, Instant occurredAt, Instant measuredAt,
+            Map<String, Object> envelope) throws InterruptedException {
         Duration backoff = Duration.ofSeconds(1);
         while (true) {
             try {
-                return db.inTransaction((Connection connection) ->
-                        store.addReading(connection, eventId, assetId, occurredAt, envelope));
+                OutboxStore.ReadingInsert result = db.inTransaction((Connection connection) ->
+                        store.addReading(connection, eventId, assetId, occurredAt, measuredAt, envelope));
+                if (result.added()) {
+                    store.countRecorded(EventClass.READING);
+                }
+                store.countDropped("size", result.dropped());
+                return result.added();
             } catch (SQLException error) {
                 if (!running) {
                     throw new IllegalStateException("Shutting down; the broker redelivers the reading", error);

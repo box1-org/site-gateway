@@ -27,7 +27,6 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
-import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.WakeupException;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
@@ -84,6 +83,7 @@ public class PickListConsumer {
             current.wakeup();
         }
         if (thread != null) {
+            thread.interrupt();
             thread.join(Duration.ofSeconds(10).toMillis());
         }
     }
@@ -169,9 +169,9 @@ public class PickListConsumer {
                     }
                     backoff = Duration.ofSeconds(1);
                 }
-            } catch (WakeupException stopping) {
+            } catch (WakeupException | org.apache.kafka.common.errors.InterruptException stopping) {
                 return;
-            } catch (KafkaException | SQLException error) {
+            } catch (SQLException | RuntimeException error) {
                 LOG.warnf("Pick list consumer paused (retry in %ds): %s", backoff.toSeconds(), error.getMessage());
                 sleep(backoff);
                 backoff = backoff.multipliedBy(2).compareTo(Duration.ofSeconds(30)) > 0 ? Duration.ofSeconds(30)
@@ -188,7 +188,7 @@ public class PickListConsumer {
         Map<TopicPartition, OffsetAndMetadata> next = new HashMap<>();
         db.inTransaction((Connection connection) -> {
             for (ConsumerRecord<String, byte[]> record : records) {
-                outcomes.merge(apply(connection, record.value()), 1, Integer::sum);
+                outcomes.merge(applyOrSkip(connection, record), 1, Integer::sum);
                 next.put(new TopicPartition(record.topic(), record.partition()),
                         new OffsetAndMetadata(record.offset() + 1));
             }
@@ -200,6 +200,29 @@ public class PickListConsumer {
             LOG.warnf("Skipped %d pick list records that could not be parsed", outcomes.get("poison"));
         }
         created.commitSync(next);
+    }
+
+    /**
+     * Applies one record inside a savepoint. A record the database rejects as data (SQLState class 22 or 23, for
+     * example a NUL character in a text field) is skipped and counted, so it cannot stop the consumer; any other
+     * database error fails the batch, which is retried.
+     */
+    private String applyOrSkip(Connection connection, ConsumerRecord<String, byte[]> record) throws SQLException {
+        java.sql.Savepoint savepoint = connection.setSavepoint();
+        try {
+            String outcome = apply(connection, record.value());
+            connection.releaseSavepoint(savepoint);
+            return outcome;
+        } catch (SQLException error) {
+            String state = error.getSQLState();
+            if (state != null && (state.startsWith("22") || state.startsWith("23"))) {
+                connection.rollback(savepoint);
+                LOG.warnf("Skipped pick list record %s-%d@%d: rejected by the database (%s)", record.topic(),
+                        record.partition(), record.offset(), state);
+                return "rejected";
+            }
+            throw error;
+        }
     }
 
     private Properties properties() {

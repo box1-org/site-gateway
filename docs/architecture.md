@@ -36,15 +36,15 @@ in one transaction.
 
 | Topic | Decision | Why |
 |---|---|---|
-| MQTT | Topic `box1/sites/<siteId>/readings`, QoS 1. The gateway subscribes durably (client ID `site-gateway-<siteId>`, clean session off) and acknowledges a message only after its outbox row is committed (`manualAcksEnabled`). A database outage blocks the subscription with backoff; at shutdown the message stays unacknowledged and the broker redelivers it | At-least-once from broker to outbox; the outbox insert is idempotent on `eventId` |
+| MQTT | Topic `box1/sites/<siteId>/readings`, QoS 1. The gateway subscribes durably (client ID `site-gateway-<siteId>`, clean session off) and acknowledges a message only after its outbox row is committed (`manualAcksEnabled`). A database outage blocks the subscription with backoff; at shutdown the message stays unacknowledged and the broker redelivers it. Camel's Paho consumer registers its callback only after connecting, so once per client the gateway reconnects with the callback in place (`MqttSessionResync`) and the broker redelivers anything left unacknowledged in that gap | At-least-once from broker to outbox; the outbox insert is idempotent on `eventId` |
 | Reading `eventId` | `UUID.nameUUIDFromBytes("box1/equipment.reading.v1/<assetId>/<metricName>/<measuredAt>")`, as asset-service and `TELEMETRY.md`; a test checks the contract's test vector | A re-sent reading is the same event downstream |
 | Reading key and topic | `box1.telemetry.events.v1`, key `assetId` (the readings contract), `causationId` `ingest:site`. The issue's "keyed by `siteId`" applies to site events only | Changing the readings key would be a breaking contract change |
 | Site events | `box1.site.events.v1`, key and `aggregateId` `siteId`; random `eventId` generated with the local action; site-local IDs `pick_…`, `cnt_…`, `hold_…`; header `box1-site-id` | SITE.md |
 | Outbox | One table, single publisher, rows locked `FOR UPDATE SKIP LOCKED` in `seq` order; a row is marked published only after the broker acknowledged it, as the acknowledged prefix of each batch | Ordered per site and per asset; a crash re-sends with the same `eventId` |
-| Producer | `acks=all`, idempotence on, 5 in flight, `delivery.timeout.ms` 30 s, `request.timeout.ms` 10 s, `max.block.ms` 10 s; recreated after any failure; backoff 1 s doubling to 60 s | Bounded failure while disconnected, no busy loop |
-| Buffer bound | Readings: at most 100 000 unpublished and at most 12 h old. Site events: at most 20 000 unpublished. Published rows kept 48 h | At 1 reading / 5 s / asset a site produces about 17 300 readings a day; 100 000 rows is under 100 MB; asset-service rejects readings older than its 24 h retention |
+| Producer | `acks=all`, idempotence on, 5 in flight, `delivery.timeout.ms` 30 s, `request.timeout.ms` 10 s, `max.block.ms` 5 s. Each batch first fetches the topics' metadata (one bounded wait of 5 s when Kafka is unreachable) and stops at the first failed send; the producer is kept on retriable errors and recreated on any other; backoff 1 s doubling to 60 s | A disconnected site holds the batch's row locks for at most about 50 s per attempt, never once per row |
+| Buffer bound | Readings: at most 100 000 unpublished and at most 12 h old, measured from the older of `measuredAt` and the time the site received them (checked every 30 s). Site events: at most 20 000 unpublished. Published rows kept 48 h | At 1 reading / 5 s / asset a site produces about 17 300 readings a day; 100 000 rows is under 100 MB; asset-service rejects readings older than its 24 h retention |
 | Overflow | Readings: the oldest unpublished are dropped first, each drop recorded in `outbox_drop` and counted. Site events: never dropped; a new operator action is refused with 503 `BUFFER_FULL` and nothing is recorded | Operator actions are business data; readings are telemetry |
-| Pick list | Group `site-gateway-<siteId>` on `box1.inventory.events.v1` and `box1.fulfillment.events.v1`, `earliest`; keeps `inventory.reserved.v1` for its own site; `inventory.reservation-expired.v1` closes an open item; `shipment.confirmed.v1` closes any item; a closure that arrives first is remembered (`pick_closure`); offsets committed after the local commit | SITE.md; works offline; replay-safe |
+| Pick list | Group `site-gateway-<siteId>` on `box1.inventory.events.v1` and `box1.fulfillment.events.v1`, `earliest`; keeps `inventory.reserved.v1` for its own site; `inventory.reservation-expired.v1` closes an open item; `shipment.confirmed.v1` closes any item; a closure that arrives first is remembered (`pick_closure`); offsets committed after the local commit. Each record runs in a savepoint: one the database rejects as data (SQLState class 22/23) is skipped and counted (`outcome="rejected"`), anything else retries the batch | SITE.md; works offline; replay-safe; one bad record cannot stop the consumer |
 | Pick | Confirms the whole reserved quantity of one open item; no partial picks in v1 | Matches `site.pick-confirmed.v1` and inventory-service's rule |
 | Status | Every 15 s; not buffered; facts from `/run/box1/site-facts.json` so the gateway needs no privilege | SITE.md, box1-docs#130 |
 | Readiness | Gateway ready only when PostgreSQL answers, every packaged migration is applied, and the MQTT subscription is connected. Kafka and asset-service are not checked | greenboot required checks (box1-docs#133) must not roll back a healthy site whose link is down |
@@ -67,3 +67,18 @@ backward compatible (additive only).
   first boot by the image (`SITE_DB_PASSWORD`).
 - A site forwards only readings whose `siteId` is its own.
 - Until box1-docs#71, Kafka has no client authentication; the `box1-site-id` header is informational.
+
+## Known limits
+
+- **Pick list after a long outage.** Items close only on events. A site offline for longer than the topics' retention
+  (7 days for `box1.inventory.events.v1`) can miss an expiry, and the item stays open. Items are not expired locally
+  from `expiresAt`, because a committed reservation no longer expires. Picking such an item opens `PICK_NOT_HELD` in
+  inventory-service.
+- **First boot.** Readings the simulator publishes before the gateway's first durable subscription exists are not
+  kept by the broker. After that, the subscription is durable.
+- **Stopping during a database wait.** At start the gateway retries Flyway for up to 2 minutes; a stop in that time
+  ends at the unit's stop timeout.
+- **Versions.** The heartbeat reports the gateway's build version for all three modules; they come from one bundle,
+  and `bundleDigest` identifies it exactly.
+- **MQTT resync test.** The containers test for a broker backlog after a reconnect passes with and without the resync
+  (the gap did not occur against Artemis 2.42 in that run); the resync stays as a safeguard.

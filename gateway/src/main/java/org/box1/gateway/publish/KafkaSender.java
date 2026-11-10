@@ -33,6 +33,16 @@ public class KafkaSender {
         this.config = config;
     }
 
+    /**
+     * Fails fast when the cluster cannot be reached: fetching a topic's metadata blocks at most max.block.ms and throws,
+     * where send() would wait max.block.ms for every record of a batch and only then fail its future.
+     */
+    public synchronized void requireMetadata(java.util.Collection<String> topics) {
+        for (String topic : topics) {
+            producer().partitionsFor(topic);
+        }
+    }
+
     public synchronized Future<RecordMetadata> send(OutboxRow row) {
         ProducerRecord<String, byte[]> record = new ProducerRecord<>(row.topic(), row.key(),
                 row.envelope().getBytes(StandardCharsets.UTF_8));
@@ -40,7 +50,7 @@ public class KafkaSender {
         return producer().send(record);
     }
 
-    /** Closes the producer after a failure; the next send creates a new one. */
+    /** Closes the producer after a non-retriable failure; the next send creates a new one. */
     public synchronized void reset() {
         if (producer != null) {
             producer.close(Duration.ofSeconds(5));
@@ -71,7 +81,7 @@ public class KafkaSender {
         properties.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, "30000");
         properties.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, "10000");
         properties.put(ProducerConfig.LINGER_MS_CONFIG, "20");
-        properties.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, "10000");
+        properties.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, "5000");
         properties.put(ProducerConfig.RECONNECT_BACKOFF_MAX_MS_CONFIG, "10000");
         return properties;
     }

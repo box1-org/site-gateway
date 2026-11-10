@@ -20,6 +20,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import org.box1.gateway.config.SiteConfig;
 import org.box1.gateway.outbox.BufferFullException;
 import org.box1.gateway.outbox.Envelopes;
+import org.box1.gateway.outbox.EventClass;
 import org.box1.gateway.outbox.OutboxStore;
 import org.box1.gateway.outbox.SiteEvents;
 import org.box1.gateway.picklist.PickItem;
@@ -176,8 +177,23 @@ public class SiteActions {
     }
 
     private ActionResult record(UUID requestId, String action, Db.Work<ActionResult> work) throws SQLException {
+        ActionResult recorded = recordOnce(requestId, action, work);
+        if (!recorded.replayed()) {
+            outbox.countRecorded(EventClass.SITE_EVENT);
+        }
+        return recorded;
+    }
+
+    private ActionResult recordOnce(UUID requestId, String action, Db.Work<ActionResult> work) throws SQLException {
         try {
             return db.inTransaction(connection -> {
+                // Serialise submits of the same requestId: a concurrent duplicate waits here, then sees the first
+                // one's result instead of failing on the state the first one changed.
+                try (PreparedStatement lock = connection.prepareStatement(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))")) {
+                    lock.setString(1, requestId.toString());
+                    lock.execute();
+                }
                 Optional<ActionResult> earlier = earlier(connection, requestId);
                 if (earlier.isPresent()) {
                     if (!earlier.get().action().equals(action)) {

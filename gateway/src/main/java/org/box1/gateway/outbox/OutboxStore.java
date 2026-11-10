@@ -27,6 +27,10 @@ import org.jboss.logging.Logger;
  */
 @ApplicationScoped
 public class OutboxStore {
+    /** The outcome of adding a reading: whether it was new, and how many older readings the bound dropped. */
+    public record ReadingInsert(boolean added, long dropped) {
+    }
+
     private static final Logger LOG = Logger.getLogger(OutboxStore.class);
 
     private final ObjectMapper mapper;
@@ -42,22 +46,41 @@ public class OutboxStore {
     }
 
     /**
-     * Adds a reading. Returns false when a row with this eventId already exists (an MQTT redelivery). When the readings
-     * bound is reached, the oldest unpublished readings are dropped first and the drop is recorded.
+     * Adds a reading. {@code added} is false when a row with this eventId already exists (an MQTT redelivery). When the
+     * readings bound is reached, the oldest unpublished readings are dropped first and the drop is recorded. Metrics
+     * are the caller's, after the transaction commits ({@link #countRecorded}, {@link #countDropped}).
      */
-    public boolean addReading(Connection connection, UUID eventId, String assetId, Instant occurredAt,
-            Map<String, Object> envelope) throws SQLException {
+    public ReadingInsert addReading(Connection connection, UUID eventId, String assetId, Instant occurredAt,
+            Instant measuredAt, Map<String, Object> envelope) throws SQLException {
         boolean added = insert(connection, eventId, EventClass.READING, Envelopes.READING_EVENT,
-                config.kafka().readingsTopic(), assetId, occurredAt, envelope);
+                config.kafka().readingsTopic(), assetId, occurredAt, measuredAt, envelope);
+        long dropped = 0;
         if (added) {
             long pending = countPending(connection, EventClass.READING);
             long excess = pending - config.buffer().maxReadings();
             if (excess > 0) {
-                dropOldestReadings(connection, excess, "SIZE");
+                dropped = dropOldestReadings(connection, excess, eventId);
             }
-            registry.counter("site.outbox.recorded", "class", "reading").increment();
         }
-        return added;
+        return new ReadingInsert(added, dropped);
+    }
+
+    public void countRecorded(EventClass eventClass) {
+        registry.counter("site.outbox.recorded", "class", tag(eventClass)).increment();
+    }
+
+    public void countPublished(EventClass eventClass, long rows) {
+        registry.counter("site.outbox.published", "class", tag(eventClass)).increment(rows);
+    }
+
+    public void countDropped(String reason, long rows) {
+        if (rows > 0) {
+            registry.counter("site.outbox.dropped", "reason", reason).increment(rows);
+        }
+    }
+
+    private static String tag(EventClass eventClass) {
+        return eventClass.name().toLowerCase(java.util.Locale.ROOT);
     }
 
     /**
@@ -72,10 +95,9 @@ public class OutboxStore {
             throw new BufferFullException(backlog, config.buffer().maxSiteEvents());
         }
         if (!insert(connection, eventId, EventClass.SITE_EVENT, eventType, config.kafka().siteTopic(), config.id(),
-                occurredAt, envelope)) {
+                occurredAt, null, envelope)) {
             throw new IllegalStateException("Duplicate site event " + eventId);
         }
-        registry.counter("site.outbox.recorded", "class", "site_event").increment();
     }
 
     /** Locks up to {@code limit} unpublished rows in seq order, skipping rows another transaction holds. */
@@ -126,12 +148,16 @@ public class OutboxStore {
         }
     }
 
-    /** Drops unpublished readings older than the age bound. Returns the number dropped. */
+    /**
+     * Drops unpublished readings older than the age bound, measured from the older of measuredAt and the time the site
+     * received them (a reading already old on arrival, for example held in the broker, ages from its measurement).
+     * Returns the number dropped.
+     */
     public long dropExpiredReadings(Connection connection) throws SQLException {
         Instant cutoff = clock.instant().minus(config.buffer().maxReadingAge());
         String sql = "DELETE FROM outbox WHERE seq IN (SELECT seq FROM outbox WHERE published_at IS NULL "
-                + "AND event_class = 'READING' AND occurred_at < ? ORDER BY seq LIMIT 10000 FOR UPDATE SKIP LOCKED) "
-                + "RETURNING seq";
+                + "AND event_class = 'READING' AND LEAST(COALESCE(measured_at, occurred_at), occurred_at) < ? "
+                + "ORDER BY seq LIMIT 10000 FOR UPDATE SKIP LOCKED) RETURNING seq";
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setTimestamp(1, Timestamp.from(cutoff));
             return recordDrop(connection, statement, "AGE");
@@ -150,9 +176,9 @@ public class OutboxStore {
     }
 
     private boolean insert(Connection connection, UUID eventId, EventClass eventClass, String eventType, String topic,
-            String key, Instant occurredAt, Map<String, Object> envelope) throws SQLException {
+            String key, Instant occurredAt, Instant measuredAt, Map<String, Object> envelope) throws SQLException {
         String sql = "INSERT INTO outbox (event_id, event_class, event_type, topic, record_key, envelope, occurred_at, "
-                + "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (event_id) DO NOTHING";
+                + "created_at, measured_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (event_id) DO NOTHING";
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setObject(1, eventId);
             statement.setString(2, eventClass.name());
@@ -162,6 +188,7 @@ public class OutboxStore {
             statement.setString(6, json(envelope));
             statement.setTimestamp(7, Timestamp.from(occurredAt));
             statement.setTimestamp(8, Timestamp.from(clock.instant()));
+            statement.setTimestamp(9, measuredAt == null ? null : Timestamp.from(measuredAt));
             return statement.executeUpdate() == 1;
         }
     }
@@ -177,12 +204,14 @@ public class OutboxStore {
         }
     }
 
-    private void dropOldestReadings(Connection connection, long count, String reason) throws SQLException {
+    /** Drops the oldest unpublished readings, never the one just inserted; rows a publisher holds are skipped. */
+    private long dropOldestReadings(Connection connection, long count, UUID keep) throws SQLException {
         String sql = "DELETE FROM outbox WHERE seq IN (SELECT seq FROM outbox WHERE published_at IS NULL "
-                + "AND event_class = 'READING' ORDER BY seq LIMIT ? FOR UPDATE SKIP LOCKED) RETURNING seq";
+                + "AND event_class = 'READING' AND event_id <> ? ORDER BY seq LIMIT ? FOR UPDATE SKIP LOCKED) RETURNING seq";
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setLong(1, count);
-            recordDrop(connection, statement, reason);
+            statement.setObject(1, keep);
+            statement.setLong(2, count);
+            return recordDrop(connection, statement, "SIZE");
         }
     }
 
@@ -208,7 +237,6 @@ public class OutboxStore {
                 log.setLong(5, last);
                 log.executeUpdate();
             }
-            registry.counter("site.outbox.dropped", "reason", reason.toLowerCase(java.util.Locale.ROOT)).increment(dropped);
             LOG.warnf("Dropped %d unpublished readings (bound %s), seq %d..%d", dropped, reason, first, last);
         }
         return dropped;

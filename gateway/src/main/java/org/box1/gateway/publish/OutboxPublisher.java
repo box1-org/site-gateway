@@ -7,7 +7,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -18,6 +17,7 @@ import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.box1.gateway.config.SiteConfig;
+import org.box1.gateway.outbox.EventClass;
 import org.box1.gateway.outbox.OutboxRow;
 import org.box1.gateway.outbox.OutboxStore;
 import org.box1.gateway.support.Db;
@@ -84,16 +84,22 @@ public class OutboxPublisher {
 
     /** Sends one batch and marks its acknowledged prefix published (also used by tests). */
     public int drainOnce() throws SQLException {
-        return db.inTransaction((Connection connection) -> {
+        List<OutboxRow> published = db.inTransaction((Connection connection) -> {
             List<OutboxRow> rows = store.lockPending(connection, config.buffer().publishBatch());
             if (rows.isEmpty()) {
-                return 0;
+                return List.<OutboxRow>of();
             }
             List<Future<RecordMetadata>> futures = new ArrayList<>(rows.size());
             PublishException failure = null;
             try {
+                // One bounded wait when the cluster is unreachable, instead of one per row while the rows are locked.
+                sender.requireMetadata(rows.stream().map(OutboxRow::topic).distinct().toList());
                 for (OutboxRow row : rows) {
-                    futures.add(sender.send(row));
+                    Future<RecordMetadata> future = sender.send(row);
+                    futures.add(future);
+                    if (future.isDone() && future.state() == Future.State.FAILED) {
+                        break;
+                    }
                 }
             } catch (RuntimeException error) {
                 failure = new PublishException(error);
@@ -111,18 +117,36 @@ public class OutboxPublisher {
                 }
             }
             store.markPublished(connection, acknowledged);
-            for (OutboxRow row : acknowledged) {
-                registry.counter("site.outbox.published", "class", row.eventClass().name().toLowerCase(Locale.ROOT))
-                        .increment();
-            }
             if (failure != null) {
                 // Commit the acknowledged prefix, then fail the tick so the rest is retried after a backoff.
                 connection.commit();
-                sender.reset();
+                count(acknowledged);
+                if (!retriable(failure)) {
+                    sender.reset();
+                }
                 throw failure;
             }
-            return acknowledged.size();
+            return acknowledged;
         });
+        count(published);
+        return published.size();
+    }
+
+    private void count(List<OutboxRow> rows) {
+        for (EventClass eventClass : EventClass.values()) {
+            store.countPublished(eventClass, rows.stream().filter(r -> r.eventClass() == eventClass).count());
+        }
+    }
+
+    /** Timeouts and other retriable errors keep the producer (and its metadata); anything else replaces it. */
+    static boolean retriable(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof org.apache.kafka.common.errors.RetriableException
+                    || cause instanceof TimeoutException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static Duration min(Duration a, Duration b) {
