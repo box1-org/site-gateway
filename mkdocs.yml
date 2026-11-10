@@ -2,5 +2,7 @@ site_name: site-gateway
 site_description: "Edge shipment applications"
 nav:
   - Home: index.md
+  - Architecture: architecture.md
+  - Runbook: runbook.md
 plugins:
   - techdocs-core

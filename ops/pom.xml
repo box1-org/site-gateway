@@ -6,7 +6,8 @@
         <artifactId>site-gateway</artifactId>
         <version>1.0.0-SNAPSHOT</version>
     </parent>
-    <!-- Bundled as /ops/quarkus-app/ (Quarkus fast-jar). -->
+    <!-- Bundled as /ops/quarkus-app/ (Quarkus fast-jar). site-ops: the handheld pages for picks, cycle counts and holds
+         (box1-docs#129). It keeps no state; every action goes to the gateway's local API. -->
     <artifactId>ops</artifactId>
 
     <dependencies>
@@ -20,11 +21,36 @@
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-rest-qute</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-rest-client-jackson</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-rest-csrf</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-logging-json</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.webjars.npm</groupId>
+            <artifactId>htmx.org</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
             <artifactId>quarkus-smallrye-health</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-junit</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-junit-mockito</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

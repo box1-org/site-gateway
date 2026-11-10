@@ -26,6 +26,11 @@
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.version>3.40.1.1</quarkus.platform.version>
         <skipITs>true</skipITs>
+        <!-- box1-ops-contracts commit that the contract tests validate events against (box1-docs#126). -->
+        <contracts.ref>5b7296ca87aeed7a4f89a443e45931def4706658</contracts.ref>
+        <!-- Tests tagged "containers" need PostgreSQL, Kafka and an MQTT broker in local containers; the CI task has
+             no container runtime. Run them with -Pcontainers. -->
+        <test.excluded.groups>containers</test.excluded.groups>
         <surefire-plugin.version>3.5.6</surefire-plugin.version>
     </properties>
 
@@ -44,6 +49,27 @@
                 <version>${quarkus.platform.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <!-- Camel Quarkus from the same Quarkus platform release (MQTT routes in gateway and simulator). -->
+            <dependency>
+                <groupId>${quarkus.platform.group-id}</groupId>
+                <artifactId>quarkus-camel-bom</artifactId>
+                <version>${quarkus.platform.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Validates produced events against box1-ops-contracts at contracts.ref (as asset-service does). -->
+            <dependency>
+                <groupId>com.networknt</groupId>
+                <artifactId>json-schema-validator</artifactId>
+                <version>1.5.9</version>
+                <scope>test</scope>
+            </dependency>
+            <!-- htmx for the site-ops handheld pages, served from the jar: the site works offline, so no CDN. -->
+            <dependency>
+                <groupId>org.webjars.npm</groupId>
+                <artifactId>htmx.org</artifactId>
+                <version>2.0.11</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -80,9 +106,11 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>${surefire-plugin.version}</version>
                 <configuration>
+                    <excludedGroups>${test.excluded.groups}</excludedGroups>
                     <systemPropertyVariables>
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
                         <maven.home>${maven.home}</maven.home>
+                        <contracts.ref>${contracts.ref}</contracts.ref>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>
@@ -132,4 +160,12 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <!-- Also run the tests tagged "containers" (Testcontainers: PostgreSQL, Kafka, ActiveMQ Artemis MQTT). -->
+            <id>containers</id>
+            <properties><test.excluded.groups></test.excluded.groups></properties>
+        </profile>
+    </profiles>
 </project>

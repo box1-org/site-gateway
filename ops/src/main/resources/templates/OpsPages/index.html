@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false}'>
+<title>Site ops · {siteId}</title>
+<link rel="stylesheet" href="/ops.css">
+<script src="/webjars/htmx.org/2.0.11/dist/htmx.min.js"></script>
+</head>
+<body>
+<header>
+  <h1>Site ops <span class="site">{siteId}</span></h1>
+  <p class="instance">{instance}</p>
+  <div id="buffer" hx-get="/buffer" hx-trigger="load, every 10s" aria-live="polite"></div>
+</header>
+<nav aria-label="Tasks">
+  <button type="button" hx-get="/picks" hx-target="#main">Pick list</button>
+  <button type="button" hx-get="/counts" hx-target="#main">Cycle count</button>
+  <button type="button" hx-get="/holds" hx-target="#main">Holds</button>
+</nav>
+<main id="main" hx-get="/picks" hx-trigger="load" aria-live="polite"></main>
+</body>
+</html>

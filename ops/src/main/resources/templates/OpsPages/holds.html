@@ -1,0 +1,33 @@
+<section>
+<h2>Holds</h2>
+{#include OpsPages/notice /}
+<form hx-post="/holds" hx-target="#main">
+  <input type="hidden" name="{inject:csrf.parameterName}" value="{inject:csrf.token}">
+  <input type="hidden" name="requestId" value="{ops:requestId}">
+  <label for="hold-sku">SKU</label>
+  <input id="hold-sku" name="sku" required maxlength="80" autocomplete="off">
+  <label for="hold-quantity">Units</label>
+  <input id="hold-quantity" name="quantity" type="number" inputmode="numeric" min="1" max="1000000" required>
+  <label for="hold-reason">Reason</label>
+  <select id="hold-reason" name="reasonCode" required>
+    {#for reason in reasons}<option value="{reason}">{reason}</option>{/for}
+  </select>
+  <button type="submit">Place hold</button>
+</form>
+{#if !placed.isEmpty}
+<h3>Placed holds</h3>
+<ul class="cards">
+{#for hold in placed}
+  <li>
+    <form hx-post="/holds/{hold.holdId}/release" hx-target="#main">
+      <input type="hidden" name="{inject:csrf.parameterName}" value="{inject:csrf.token}">
+      <input type="hidden" name="requestId" value="{ops:requestId}">
+      <p class="sku">{hold.quantity} × {hold.sku}</p>
+      <p class="meta">{hold.reasonCode} · since {hold.placedAt}</p>
+      <button type="submit" class="secondary">Release hold</button>
+    </form>
+  </li>
+{/for}
+</ul>
+{/if}
+</section>
