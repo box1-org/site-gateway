@@ -1,0 +1,25 @@
+<section>
+<h2>Pick list</h2>
+{#include OpsPages/notice /}
+{#if open.isEmpty}<p>No open picks.</p>{/if}
+<ul class="cards">
+{#for item in open}
+  <li>
+    <form hx-post="/picks/{item.orderId}" hx-target="#main">
+      <input type="hidden" name="{inject:csrf.parameterName}" value="{inject:csrf.token}">
+      <input type="hidden" name="requestId" value="{ops:requestId}">
+      <p class="sku">{item.quantity} × {item.sku}</p>
+      <p class="meta">Order {item.orderId} · expires {item.expiresAt}</p>
+      <button type="submit">Confirm pick</button>
+    </form>
+  </li>
+{/for}
+</ul>
+{#if !picked.isEmpty}
+<h3>Picked, awaiting shipment</h3>
+<ul class="plain">
+{#for item in picked}<li>{item.quantity} × {item.sku} · order {item.orderId} · picked {item.pickedAt}</li>{/for}
+</ul>
+{/if}
+<button type="button" class="secondary" hx-get="/picks" hx-target="#main">Refresh</button>
+</section>

@@ -1,0 +1,19 @@
+<section>
+<h2>Cycle count</h2>
+{#include OpsPages/notice /}
+<form hx-post="/counts" hx-target="#main">
+  <input type="hidden" name="{inject:csrf.parameterName}" value="{inject:csrf.token}">
+  <input type="hidden" name="requestId" value="{ops:requestId}">
+  <label for="count-sku">SKU</label>
+  <input id="count-sku" name="sku" required maxlength="80" autocomplete="off">
+  <label for="count-quantity">Units counted (including picked, not yet shipped)</label>
+  <input id="count-quantity" name="countedQuantity" type="number" inputmode="numeric" min="0" max="1000000" required>
+  <button type="submit">Record count</button>
+</form>
+{#if !recent.isEmpty}
+<h3>Recent counts</h3>
+<ul class="plain">
+{#for count in recent}<li>{count.quantity} × {count.sku} at {count.recordedAt}</li>{/for}
+</ul>
+{/if}
+</section>

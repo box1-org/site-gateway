@@ -1,0 +1,5 @@
+{#if available}
+<p class="buffer">Waiting to send: {buffer.depth} ({buffer.siteEvents} actions{#if buffer.oldestAgeSeconds > 0}, oldest {buffer.oldestAgeSeconds} s{/if})</p>
+{#else}
+<p class="buffer error" role="alert">✖ Gateway not responding</p>
+{/if}
