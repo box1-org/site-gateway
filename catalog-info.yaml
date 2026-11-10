@@ -1,0 +1,32 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: site-gateway
+  description: "Edge shipment applications"
+  annotations:
+    github.com/project-slug: box1-org/site-gateway
+    backstage.io/techdocs-ref: dir:.
+    backstage.io/source-location: url:https://github.com/box1-org/site-gateway/
+    janus-idp.io/tekton: site-gateway
+    box1.org/template-version: "1.0.0"
+    box1.org/bundle-image: box1-ci/site-gateway-bundle
+    box1.org/bundle-consumer: box1-org/site-gateway-os
+  tags: [java, quarkus, maven, tekton, oci-bundle]
+  links:
+    - url: https://github.com/box1-org/site-gateway
+      title: Source Repository
+      icon: github
+    - url: https://github.com/box1-org/site-gateway-os
+      title: Consumer repository (site-gateway-os)
+      icon: github
+    - url: https://github.com/box1-org/box1-workloads-dev/tree/main/ci/site-gateway
+      title: CI configuration (PaC Repository and release identity)
+    - url: https://devspaces.apps.ocp.box1.org/#https://github.com/box1-org/site-gateway
+      title: Open in Dev Spaces
+      icon: code
+spec:
+  # Code-only: no backstage.io/kubernetes-id or argocd/* annotations, because nothing
+  # is deployed. The modules ship inside the consumer's OS image.
+  type: library
+  lifecycle: experimental
+  owner: "user:default/mike"

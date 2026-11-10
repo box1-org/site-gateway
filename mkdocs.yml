@@ -1,0 +1,6 @@
+site_name: site-gateway
+site_description: "Edge shipment applications"
+nav:
+  - Home: index.md
+plugins:
+  - techdocs-core
