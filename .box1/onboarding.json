@@ -1,0 +1,8 @@
+{
+  "id": "531f1ff4-07b2-4518-b5f5-b04037f0d9da",
+  "name": "site-gateway",
+  "namespace": "site-gateway-dev",
+  "owner": "user:default/mike",
+  "templateVersion": "1.0.0",
+  "profile": "artifact"
+}
