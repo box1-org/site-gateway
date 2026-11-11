@@ -74,10 +74,12 @@ lost, the operator retries after the link returns. Limits are set with `SITE_BUF
 
 ## Using site-ops
 
-The pages listen on 127.0.0.1:8081 in the VM. From a workstation:
+The pages listen on 127.0.0.1:8081 in the VM only, so `virtctl port-forward` (which connects to the guest's network
+interface) is refused. Use an SSH tunnel through `virtctl ssh` (needs your key in the instance's admin-ssh Secret):
 
 ```sh
-virtctl port-forward vmi/site-west -n site-west-dev 18081:8081   # then open http://127.0.0.1:18081/
+virtctl ssh -n site-west-dev cloud-user@vmi/site-west --local-ssh-opts="-N" --local-ssh-opts="-L 18081:127.0.0.1:8081"
+# then open http://127.0.0.1:18081/ ; Ctrl-C closes the tunnel. For site-east use site-east-dev and vmi/site-east.
 ```
 
 ## Breach scenario
